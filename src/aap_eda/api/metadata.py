@@ -28,7 +28,10 @@ class EDAMetadata(metadata.SimpleMetadata):
             value = getattr(field, attr, None)
             if value is not None and value != "":
                 field_info[attr] = force_str(value, strings_only=True)
-        return field_info
+
+        from ansible_base.lib.metadata import inject_clean_text_patterns
+
+        return inject_clean_text_patterns(field, field_info)
 
     def determine_actions(self, request, view):
         """For generic class based views we return information about.
