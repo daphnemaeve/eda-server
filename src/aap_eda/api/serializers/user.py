@@ -12,6 +12,7 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
+from ansible_base.lib.serializers.mixins import CleanTextMixin
 from django.contrib.auth.hashers import make_password
 from rest_framework import serializers
 from rest_framework.exceptions import PermissionDenied
@@ -23,7 +24,7 @@ from .fields.ansible_resource import AnsibleResourceFieldSerializer
 from .mixins import SharedResourceSerializerMixin
 
 
-class UserSerializer(serializers.ModelSerializer):
+class UserSerializer(CleanTextMixin, serializers.ModelSerializer):
     resource = AnsibleResourceFieldSerializer(read_only=True)
 
     class Meta:
@@ -182,7 +183,11 @@ class AwxTokenSerializer(serializers.ModelSerializer):
         ]
 
 
-class AwxTokenCreateSerializer(serializers.ModelSerializer):
+class AwxTokenCreateSerializer(CleanTextMixin, serializers.ModelSerializer):
+    # token holds the secret AWX token value, so it is excluded from
+    # free-text checks.
+    excluded_fields = frozenset({"token"})
+
     class Meta:
         model = models.AwxToken
         fields = [
@@ -205,4 +210,4 @@ class AwxTokenCreateSerializer(serializers.ModelSerializer):
         if existing_token.exists():
             raise Conflict("Token with this name already exists.")
 
-        return data
+        return super().validate(data)
