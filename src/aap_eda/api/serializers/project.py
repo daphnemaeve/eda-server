@@ -14,6 +14,7 @@
 
 from urllib.parse import urlparse, urlunparse
 
+from ansible_base.lib.serializers.mixins import CleanTextMixin
 from rest_framework import serializers
 from rest_framework.validators import UniqueValidator
 
@@ -39,7 +40,7 @@ class ProxyFieldMixin:
         return get_proxy_for_display(url)
 
 
-class ProjectSerializer(serializers.ModelSerializer, ProxyFieldMixin):
+class ProjectSerializer(CleanTextMixin, serializers.ModelSerializer, ProxyFieldMixin):
     eda_credential_id = serializers.IntegerField(
         required=False, allow_null=True
     )

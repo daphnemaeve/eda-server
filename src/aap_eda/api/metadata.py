@@ -1,3 +1,4 @@
+from ansible_base.lib.metadata import inject_clean_text_patterns
 from django.core.exceptions import PermissionDenied
 from django.http import Http404
 from django.utils.encoding import force_str
@@ -28,6 +29,9 @@ class EDAMetadata(metadata.SimpleMetadata):
             value = getattr(field, attr, None)
             if value is not None and value != "":
                 field_info[attr] = force_str(value, strings_only=True)
+
+        field_info = inject_clean_text_patterns(field, field_info)
+
         return field_info
 
     def determine_actions(self, request, view):
