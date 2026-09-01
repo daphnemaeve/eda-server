@@ -12,6 +12,7 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 import pytest
+from django.test import override_settings
 from pytest_lazyfixture import lazy_fixture
 from rest_framework import status
 from rest_framework.test import APIClient
@@ -529,3 +530,547 @@ def test_credential_types_based_on_namespace(
     data = response.json()
     for credential_type in data["results"]:
         assert credential_type["namespace"] == "event_stream"
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("inputs", "injectors", "status_code", "key", "message"),
+    [
+        (
+            {
+                "fields": [
+                    {"id": "cert", "label": "Certificate", "type": "string"},
+                    {"id": "key", "label": "Key", "type": "string"},
+                ]
+            },
+            {
+                "file": {
+                    "template.cert_file": "[mycert]\n{{ cert }}",
+                    "template.key_file": "[mykey]\n{{ key }}",
+                },
+            },
+            status.HTTP_201_CREATED,
+            "",
+            None,
+        ),
+        (
+            {
+                "fields": [
+                    {"id": "cert", "label": "Certificate", "type": "string"},
+                    {"id": "key", "label": "Key", "type": "string"},
+                ]
+            },
+            {
+                "file": {
+                    "template.cert_file": "[mycert]\n{{ cert }}",
+                    "xyz.cert_file": "[mykey]\n{{ key }}",
+                },
+            },
+            status.HTTP_400_BAD_REQUEST,
+            "injectors",
+            ("Injector file key: xyz.cert_file should start with template"),
+        ),
+        (
+            {
+                "fields": [
+                    {"id": "cert", "label": "Certificate", "type": "string"},
+                    {"id": "key", "label": "Key", "type": "string"},
+                ]
+            },
+            {
+                "file": {
+                    "template": "[mycert]\n{{ cert }}",
+                },
+            },
+            status.HTTP_201_CREATED,
+            "",
+            None,
+        ),
+        (
+            {
+                "fields": [
+                    {"id": "cert", "label": "Certificate", "type": "string"},
+                    {"id": "key", "label": "Key", "type": "string"},
+                ]
+            },
+            {
+                "file": {
+                    "template.cert_file": "[mycert]\n{{ cert }}",
+                    "template.cert_file.abc": "[mykey]\n{{ key }}",
+                },
+            },
+            status.HTTP_400_BAD_REQUEST,
+            "injectors",
+            (
+                "Injector file key: template.cert_file.abc "
+                "cannot contain multiple dots"
+            ),
+        ),
+        (
+            {
+                "fields": [
+                    {"id": "cert", "label": "Certificate", "type": "string"},
+                    {"id": "key", "label": "Key", "type": "string"},
+                ]
+            },
+            {
+                "file": {
+                    "template.cert_file": "[mycert]\n{{ cert }}",
+                    "template": "[mykey]\n{{ key }}",
+                },
+            },
+            status.HTTP_400_BAD_REQUEST,
+            "injectors",
+            (
+                "Injector file key: template cannot be mixed "
+                "with fully qualified keys"
+            ),
+        ),
+        (
+            {
+                "fields": [
+                    {"id": "cert", "label": "Certificate", "type": "string"},
+                    {"id": "key", "label": "Key", "type": "string"},
+                ]
+            },
+            {
+                "file": {
+                    "template": "[mykey]\n{{ key }}",
+                    "template.cert_file": "[mycert]\n{{ cert }}",
+                },
+            },
+            status.HTTP_400_BAD_REQUEST,
+            "injectors",
+            (
+                "Injector file key: template.cert_file "
+                "cannot be mixed with template key"
+            ),
+        ),
+    ],
+)
+def test_create_credential_type_with_file(
+    superuser_client: APIClient,
+    inputs: dict,
+    injectors: dict,
+    status_code: int,
+    key: str,
+    message: Optional[str],
+):
+    data_in = {
+        "name": "credential_type_1",
+        "description": "desc here",
+        "inputs": inputs,
+        "injectors": injectors,
+    }
+
+    response = superuser_client.post(
+        f"{api_url_v1}/credential-types/", data=data_in
+    )
+    assert response.status_code == status_code
+    if message and key:
+        assert message in response.data[key]
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("inputs", "injectors", "status_code", "key", "message"),
+    [
+        (
+            {
+                "fields": [
+                    {"id": "name", "label": "Name", "type": "string"},
+                    {"id": "age", "label": "Age", "type": "string"},
+                ]
+            },
+            {
+                "extra_vars": {
+                    "template.filename": "{{ name }}",
+                    "age": "{{ age }}",
+                },
+                "file": {"template.filename": "Name = {{ name }}"},
+            },
+            status.HTTP_400_BAD_REQUEST,
+            "injectors",
+            "template.filename already exists",
+        ),
+        (
+            {"fields": [{"id": "name", "label": "Name", "type": "string"}]},
+            {
+                "extra_vars": {"myname": "{{ name }}"},
+                "env": {"myname": "{{ name }}"},
+            },
+            status.HTTP_400_BAD_REQUEST,
+            "injectors",
+            "myname already exists",
+        ),
+        (
+            {
+                "fields": [
+                    {"id": "name", "label": "Name", "type": "string"},
+                    {"id": "age", "label": "Age", "type": "string"},
+                ]
+            },
+            {
+                "extra_vars": {
+                    "name": "{{ name }}",
+                    "age": "{{ age }}",
+                },
+                "file": {"template": "Name = {{ name }}"},
+                "env": {
+                    "NAME": "{{ name }}",
+                    "AGE": "{{ age }}",
+                    "FNAME": "{{ eda.filename }}",
+                },
+            },
+            status.HTTP_201_CREATED,
+            "",
+            "",
+        ),
+        (
+            {
+                "fields": [
+                    {"id": "name", "label": "Name", "type": "string"},
+                    {"id": "age", "label": "Age", "type": "string"},
+                ]
+            },
+            {
+                "extra_vars": {
+                    "name": "{{ name }}",
+                    "age": "{{ age }}",
+                },
+                "file": {
+                    "template.file1": "Name = {{ name }}",
+                    "template.file2": "Age = {{ age }}",
+                },
+                "env": {
+                    "NAME": "{{ eda.filename.file1 }}",
+                    "AGE": "{{ eda.filename.file2 }}",
+                    "FNAME": "X",
+                },
+            },
+            status.HTTP_201_CREATED,
+            "",
+            "",
+        ),
+    ],
+)
+def test_create_credential_type_with_duplicates(
+    superuser_client: APIClient,
+    inputs: dict,
+    injectors: dict,
+    status_code: int,
+    key: str,
+    message: str,
+):
+    data_in = {
+        "name": "credential_type_1",
+        "inputs": inputs,
+        "injectors": injectors,
+    }
+
+    response = superuser_client.post(
+        f"{api_url_v1}/credential-types/", data=data_in
+    )
+    assert response.status_code == status_code
+    if message and key:
+        assert message in response.data[key][0]
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    (
+        "inputs",
+        "metadata",
+        "status_code",
+        "raise_exception",
+        "credential_type_id",
+    ),
+    [
+        (
+            {
+                "url": "https://www.example.com",
+                "api_version": "v2",
+                "token": "token123",
+            },
+            {"secret_path": "secret/foo", "secret_key": "bar"},
+            status.HTTP_404_NOT_FOUND,
+            False,
+            9989,
+        ),
+        (
+            {
+                "url": "https://www.example.com",
+                "api_version": "v2",
+                "token": "token123",
+            },
+            {"secret_path": "secret/foo", "secret_key": "bar"},
+            status.HTTP_202_ACCEPTED,
+            False,
+            None,
+        ),
+        (
+            {
+                "url": "https://www.example.com",
+                "api_version": "v2",
+                "token": "token123",
+            },
+            {"secret_path_missing": "secret/foo", "secret_key": "bar"},
+            status.HTTP_400_BAD_REQUEST,
+            False,
+            None,
+        ),
+        (
+            {
+                "api_version": "v2",
+                "token": "token123",
+            },
+            {"secret_path": "secret/foo", "secret_key": "bar"},
+            status.HTTP_400_BAD_REQUEST,
+            False,
+            None,
+        ),
+        (
+            {
+                "url": "https://www.example.com",
+                "api_version": "v2",
+                "token": "token123",
+            },
+            {"secret_path": "secret/foo", "secret_key": "bar"},
+            status.HTTP_400_BAD_REQUEST,
+            True,
+            None,
+        ),
+        (
+            {
+                "url": "https://www.example.com",
+                "api_version": "v2",
+                "token": "token123",
+            },
+            None,
+            status.HTTP_400_BAD_REQUEST,
+            True,
+            None,
+        ),
+        (
+            None,
+            {"secret_path": "secret/foo", "secret_key": "bar"},
+            status.HTTP_400_BAD_REQUEST,
+            True,
+            None,
+        ),
+        (
+            None,
+            None,
+            status.HTTP_400_BAD_REQUEST,
+            True,
+            None,
+        ),
+    ],
+)
+def test_credential_type_test(
+    superuser_client: APIClient,
+    default_organization: models.Organization,
+    preseed_credential_types,
+    inputs: dict,
+    metadata: dict,
+    status_code: int,
+    raise_exception: bool,
+    credential_type_id: Optional[int],
+):
+    hashi_type = models.CredentialType.objects.get(
+        name=enums.DefaultCredentialType.HASHICORP_LOOKUP
+    )
+
+    data_in = {}
+    if inputs:
+        data_in["inputs"] = inputs
+    if metadata:
+        data_in["metadata"] = metadata
+    if credential_type_id:
+        url = f"{api_url_v1}/credential-types/{credential_type_id}/test/"
+    else:
+        url = f"{api_url_v1}/credential-types/{hashi_type.id}/test/"
+
+    if raise_exception:
+        with patch(
+            "aap_eda.api.views.credential_type.run_plugin",
+            side_effect=Exception("kaboom"),
+        ):
+            response = superuser_client.post(url, data=data_in)
+            assert response.status_code == status_code
+    else:
+        with patch(
+            "aap_eda.api.views.credential_type.run_plugin", return_value="abc"
+        ):
+            response = superuser_client.post(url, data=data_in)
+            assert response.status_code == status_code
+
+
+@pytest.mark.django_db
+def test_eda_rule_engine_credential_type_exists(
+    preseed_credential_types,
+):
+    """Test that the EDA_RULE_ENGINE credential type is
+    created during migration.
+    """
+    rule_engine_cred_type = models.CredentialType.objects.filter(
+        name=enums.DefaultCredentialType.EDA_RULE_ENGINE
+    ).first()
+
+    assert rule_engine_cred_type is not None
+    assert (
+        rule_engine_cred_type.name
+        == enums.DefaultCredentialType.EDA_RULE_ENGINE
+    )
+    assert rule_engine_cred_type.managed is True
+
+    # Verify inputs structure
+    inputs = rule_engine_cred_type.inputs
+    assert "fields" in inputs
+    field_ids = {field["id"] for field in inputs["fields"]}
+
+    # Check key fields are present
+    assert "postgres_db_host" in field_ids
+    assert "postgres_db_name" in field_ids
+    assert "postgres_db_user" in field_ids
+    assert "postgres_db_password" in field_ids
+    assert "primary_encryption_secret" in field_ids
+    assert "secondary_encryption_secret" in field_ids
+    assert "aes_salt" in field_ids
+
+    # Verify required fields
+    assert "required" in inputs
+    assert "postgres_db_host" in inputs["required"]
+    assert "postgres_db_name" in inputs["required"]
+
+    # Verify injectors structure
+    injectors = rule_engine_cred_type.injectors
+    assert "extra_vars" in injectors
+    assert "drools_db_host" in injectors["extra_vars"]
+    assert "drools_db_name" in injectors["extra_vars"]
+    assert "drools_primary_encryption_secret" in injectors["extra_vars"]
+    assert "drools_secondary_encryption_secret" in injectors["extra_vars"]
+
+
+@pytest.mark.django_db
+def test_create_eda_rule_engine_credential(
+    superuser_client: APIClient,
+    preseed_credential_types,
+    default_organization: models.Organization,
+):
+    """Test creating an EDA Rule Engine credential."""
+    rule_engine_cred_type = models.CredentialType.objects.get(
+        name=enums.DefaultCredentialType.EDA_RULE_ENGINE
+    )
+
+    credential_data = {
+        "name": "test-rule-engine-credential",
+        "credential_type_id": rule_engine_cred_type.id,
+        "organization_id": default_organization.id,
+        "inputs": {
+            "postgres_db_host": "localhost",
+            "postgres_db_port": "5432",
+            "postgres_db_name": "eda_db",
+            "postgres_db_user": "eda_user",
+            "postgres_db_password": "eda_password",
+            "primary_encryption_secret": "test_primary_secret_12345",
+            "secondary_encryption_secret": "test_secondary_secret_12345",
+            "postgres_sslmode": "prefer",
+            "expired_window_grace_period": "60",
+            "deduplication_window_size": "10",
+            "overwrite_if_rulebook_changes": True,
+        },
+    }
+
+    response = superuser_client.post(
+        f"{api_url_v1}/eda-credentials/",
+        data=credential_data,
+    )
+
+    assert response.status_code == status.HTTP_201_CREATED
+    assert response.data["name"] == "test-rule-engine-credential"
+    assert response.data["credential_type"]["id"] == rule_engine_cred_type.id
+
+    # Verify the credential was created in the database
+    credential = models.EdaCredential.objects.get(id=response.data["id"])
+    assert credential.name == "test-rule-engine-credential"
+    assert credential.credential_type.id == rule_engine_cred_type.id
+
+
+@pytest.mark.django_db
+def test_eda_rule_engine_credential_validates_required_fields(
+    superuser_client: APIClient,
+    preseed_credential_types,
+    default_organization: models.Organization,
+):
+    """Test that EDA Rule Engine credential validates required fields."""
+    rule_engine_cred_type = models.CredentialType.objects.get(
+        name=enums.DefaultCredentialType.EDA_RULE_ENGINE
+    )
+
+    # Missing required field postgres_db_name
+    credential_data = {
+        "name": "test-rule-engine-credential",
+        "credential_type_id": rule_engine_cred_type.id,
+        "organization_id": default_organization.id,
+        "inputs": {
+            "postgres_db_host": "localhost",
+            "postgres_db_user": "eda_user",
+            "postgres_db_password": "eda_password",
+        },
+    }
+
+    response = superuser_client.post(
+        f"{api_url_v1}/eda-credentials/",
+        data=credential_data,
+    )
+
+    assert response.status_code == status.HTTP_400_BAD_REQUEST
+    assert "postgres_db_name" in str(response.data)
+
+
+@pytest.mark.django_db
+class TestCredentialTypeValidationPatterns:
+    """AAP-87587: pattern/pattern_description injection for JSON sub-keys."""
+
+    @override_settings(ENHANCED_INPUT_VALIDATION_ENABLED=True)
+    def test_patterns_present_when_toggle_on(
+        self,
+        superuser_client: APIClient,
+        credential_type: models.CredentialType,
+    ):
+        from ansible_base.lib.metadata import get_tier2_pattern
+
+        response = superuser_client.get(
+            f"{api_url_v1}/credential-types/{credential_type.id}/"
+        )
+        assert response.status_code == status.HTTP_200_OK
+
+        pattern = get_tier2_pattern()
+        fields_by_id = {
+            field["id"]: field for field in response.data["inputs"]["fields"]
+        }
+
+        username_field = fields_by_id["username"]
+        assert username_field["pattern"] == pattern["pattern"]
+        assert username_field["pattern_description"] == pattern["description"]
+
+        # secret fields are excluded even though they are also type "string"
+        password_field = fields_by_id["password"]
+        assert "pattern" not in password_field
+        assert "pattern_description" not in password_field
+
+    @override_settings(ENHANCED_INPUT_VALIDATION_ENABLED=False)
+    def test_patterns_absent_when_toggle_off(
+        self,
+        superuser_client: APIClient,
+        credential_type: models.CredentialType,
+    ):
+        response = superuser_client.get(
+            f"{api_url_v1}/credential-types/{credential_type.id}/"
+        )
+        assert response.status_code == status.HTTP_200_OK
+
+        for field in response.data["inputs"]["fields"]:
+            assert "pattern" not in field
+            assert "pattern_description" not in field
