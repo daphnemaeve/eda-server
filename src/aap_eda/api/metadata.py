@@ -1,3 +1,4 @@
+from ansible_base.lib.metadata import inject_clean_text_patterns
 from django.core.exceptions import PermissionDenied
 from django.http import Http404
 from rest_framework import exceptions, metadata
@@ -5,7 +6,17 @@ from rest_framework.request import clone_request
 
 
 class EDAMetadata(metadata.SimpleMetadata):
-    """Overwritten to show PATCH in OPTIONS."""
+    """Overwritten to show PATCH in OPTIONS and add more attributes."""
+
+    def get_field_info(self, field):
+        field_info = super().get_field_info(field)
+        field_info = inject_clean_text_patterns(field, field_info)
+
+        for attr in ADDITIONAL_ATTRS:
+            value = getattr(field, attr, None)
+            if value is not None and value != "":
+                field_info[attr] = force_str(value, strings_only=True)
+        return field_info
 
     def determine_actions(self, request, view):
         """For generic class based views we return information about.
