@@ -46,6 +46,7 @@ class CredentialTypeSerializer(serializers.ModelSerializer):
             data["inputs"] = _with_field_patterns(inputs)
         return data
 
+
 def _with_field_patterns(inputs: dict) -> dict:
     """Return a copy of the inputs schema with patterns for string fields.
 
@@ -73,6 +74,7 @@ def _with_field_patterns(inputs: dict) -> dict:
         for field in fields
     ]
     return {**inputs, "fields": new_fields}
+
 
 class CredentialTypeCreateSerializer(
     CleanTextMixin, serializers.ModelSerializer
